@@ -9,8 +9,8 @@ import io
 # 페이지 설정
 st.set_page_config(page_title="Excel & DB Merger", layout="wide")
 
-st.title("📊 판매 데이터(계획/실적) 통합DB 변환기")
-st.info("💡 컬럼명 변경 및 수식 계산은 오직 '1️⃣ 판매계획' 섹션에 업로드된 파일에만 적용됩니다.")
+st.title("📊 판매 데이터(계획/실적) SQLite DB 변환기")
+st.info("💡 사용자가 업로드한 판매 데이터(계획/실적)를 통합하여 SQLite DB로 변환하는 페이지입니다.")
 
 all_data = []
 
