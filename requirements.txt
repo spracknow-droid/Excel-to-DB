@@ -2,3 +2,5 @@ streamlit
 pandas
 sqlite3
 os
+openpyxl
+xlsxwriter
