@@ -3,15 +3,14 @@ import pandas as pd
 import sqlite3
 import os
 import tempfile
-import re  # 특수문자 제거용
+import re
 
 # 페이지 설정
 st.set_page_config(page_title="Excel & DB Merger", layout="wide")
 
-st.title("📊 통합 데이터 변환기 (전표번호 기준 분류)")
-st.markdown("'수익성계획전표번호' 기준 분류 및 SQL 호환성 강화 버전")
+st.title("📊 통합 데이터 변환기 (컬럼 중복 해결)")
 
-# --- 사이드바 및 함수 (기존과 동일) ---
+# --- 사이드바 및 함수 (기존 로직 유지) ---
 st.sidebar.header("📁 데이터 소스 업로드")
 uploaded_plans = st.sidebar.file_uploader("1️⃣ 판매계획 (xlsx)", type=["xlsx"], accept_multiple_files=True, key="plan_uploader")
 uploaded_results = st.sidebar.file_uploader("2️⃣ 판매실적 (xlsx)", type=["xlsx"], accept_multiple_files=True, key="result_uploader")
@@ -22,13 +21,9 @@ all_data = []
 def process_classification(df):
     if df is None or df.empty:
         return
-    
-    # 컬럼명 앞뒤 공백 제거 (매우 중요)
     df.columns = [str(c).strip() for c in df.columns]
-    
     if '수익성계획전표번호' in df.columns:
         is_plan = df['수익성계획전표번호'].notnull() & (df['수익성계획전표번호'].astype(str).str.strip() != "")
-        
         df_plan = df[is_plan].copy()
         if not df_plan.empty:
             df_plan = df_plan.rename(columns={'품명': '품목명', '판매금액': '장부금액'})
@@ -37,7 +32,6 @@ def process_classification(df):
             df_plan['판매금액'] = qty * price
             df_plan['__데이터구분__'] = "판매계획"
             all_data.append(df_plan)
-            
         df_result = df[~is_plan].copy()
         if not df_result.empty:
             df_result['__데이터구분__'] = "판매실적"
@@ -47,10 +41,9 @@ def process_classification(df):
         df_copy['__데이터구분__'] = "판매실적"
         all_data.append(df_copy)
 
-# --- 파일 로드 구간 (생략, 기존과 동일) ---
+# --- 파일 로드 (이전과 동일) ---
 if uploaded_plans or uploaded_results or uploaded_dbs:
-    with st.status("데이터 통합 처리 중...", expanded=True) as status:
-        # [기존과 동일한 파일 로드 루프 실행...]
+    with st.status("데이터 처리 중...", expanded=True) as status:
         for file in uploaded_plans:
             try: process_classification(pd.read_excel(file))
             except Exception as e: st.error(f"Plan Error: {e}")
@@ -71,19 +64,29 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
             finally:
                 if os.path.exists(tmp_path): os.remove(tmp_path)
 
-        # [Step 4] 병합 및 정제
+        # [Step 4] 병합 및 중복 컬럼명 해결 (ValueError 방지 핵심)
         if all_data:
             combined_df = pd.concat(all_data, ignore_index=True)
             
-            # 1. SQL 호환을 위한 컬럼명 정제 (핵심 수정 사항)
-            # 특수문자 제거, 공백은 언더바로 변경
-            clean_columns = []
+            # 1. SQL 호환성 및 중복 컬럼명 처리 로직
+            new_cols = []
+            col_counts = {}
             for col in combined_df.columns:
-                clean_name = re.sub(r'\W+', '_', str(col)).strip('_') # 특수문자 -> _
-                if not clean_name or clean_name[0].isdigit(): # 숫자로 시작하면 앞에 'col_' 붙임
+                # 특수문자 정제
+                clean_name = re.sub(r'\W+', '_', str(col)).strip('_')
+                if not clean_name or clean_name[0].isdigit():
                     clean_name = 'col_' + clean_name
-                clean_columns.append(clean_name)
-            combined_df.columns = clean_columns
+                
+                # 중복 이름 처리 (중복 시 이름_1, 이름_2 형식)
+                if clean_name in col_counts:
+                    col_counts[clean_name] += 1
+                    final_name = f"{clean_name}_{col_counts[clean_name]}"
+                else:
+                    col_counts[clean_name] = 0
+                    final_name = clean_name
+                new_cols.append(final_name)
+            
+            combined_df.columns = new_cols
 
             # 2. 타입 정제
             cols_to_fix = combined_df.select_dtypes(include=['object']).columns
@@ -92,22 +95,17 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
 
             combined_df = combined_df.drop_duplicates()
 
-            # [Step 5] DB 파일 생성 (OperationalError 방지)
-            db_filename = "integrated_sales_data.db"
+            # [Step 5] DB 저장 및 출력
+            db_filename = "final_integrated_data.db"
             if os.path.exists(db_filename): os.remove(db_filename)
+            conn_new = sqlite3.connect(db_filename)
+            combined_df.to_sql("total_data", conn_new, index=False, if_exists="replace")
+            conn_new.close()
             
-            try:
-                conn_new = sqlite3.connect(db_filename)
-                # chunksize를 추가하여 대량 데이터 처리 안정성 확보
-                combined_df.to_sql("total_data", conn_new, index=False, if_exists="replace", chunksize=1000)
-                conn_new.close()
-                status.update(label="통합 완료!", state="complete", expanded=False)
-            except Exception as e:
-                st.error(f"❌ DB 저장 중 치명적 오류: {e}")
-                st.write("컬럼 목록을 확인하세요:", combined_df.columns.tolist())
-
+            status.update(label="통합 완료!", state="complete", expanded=False)
             st.subheader("📊 통합 데이터 미리보기")
-            st.dataframe(combined_df.head(10))
+            st.dataframe(combined_df.head(10)) # 이제 에러 없이 표시됨
+            
             with open(db_filename, "rb") as f:
                 st.download_button("💾 통합 DB 다운로드", f, file_name=db_filename)
 else:
