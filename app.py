@@ -27,6 +27,19 @@ def add_data_tag(df):
         df['__데이터구분__'] = "판매실적"
     return df
 
+# [공통 로직] 'No' 컬럼 기반 유효 데이터 필터링 함수
+def filter_invalid_rows(df, filename):
+    if 'No' in df.columns:
+        initial_len = len(df)
+        # 'No' 컬럼이 NaN(비어있음)이거나 공백인 행 제거
+        df = df.dropna(subset=['No'])
+        df = df[df['No'].astype(str).str.strip() != ""]
+        final_len = len(df)
+        
+        if initial_len > final_len:
+            st.warning(f"⚠️ {filename}: 'No' 값이 없는 {initial_len - final_len}개의 행이 제외되었습니다.")
+    return df.reset_index(drop=True)
+
 # --- 사이드바: 3개 업로드 섹션 ---
 st.sidebar.header("📁 데이터 소스 업로드")
 uploaded_plans = st.sidebar.file_uploader("1️⃣ 판매계획 (xlsx)", type=["xlsx"], accept_multiple_files=True)
@@ -42,6 +55,9 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 df = pd.read_excel(file)
                 df.columns = [str(c).strip() for c in df.columns] # 공백 제거
                 
+                # 'No' 컬럼값 없는 행 삭제 로직 추가
+                df = filter_invalid_rows(df, file.name)
+                
                 # 1. 컬럼명 변경 (품명 -> 품목명, 판매금액 -> 장부금액)
                 df = df.rename(columns={'품명': '품목명', '판매금액': '장부금액'})
                 
@@ -54,7 +70,7 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 df = add_data_tag(df)
                 
                 all_data.append(df)
-                st.write(f"✅ [계획섹션] {file.name} - 컬럼 수정 및 태깅 완료")
+                st.write(f"✅ [계획섹션] {file.name} - 처리 완료")
             except Exception as e: st.error(f"Error ({file.name}): {e}")
 
         # [Step 2] 판매실적 섹션 (원본 컬럼 유지)
@@ -63,11 +79,14 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 df = pd.read_excel(file)
                 df.columns = [str(c).strip() for c in df.columns]
                 
+                # 'No' 컬럼값 없는 행 삭제 로직 추가
+                df = filter_invalid_rows(df, file.name)
+                
                 # 컬럼 수정 없이 태그만 추가
                 df = add_data_tag(df)
                 
                 all_data.append(df)
-                st.write(f"✅ [실적섹션] {file.name} - 원본 컬럼 유지 및 태깅 완료")
+                st.write(f"✅ [실적섹션] {file.name} - 처리 완료")
             except Exception as e: st.error(f"Error ({file.name}): {e}")
 
         # [Step 3] DB 파일 (원본 완전 보존)
@@ -80,7 +99,6 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table';", conn_old)
                 for target_table in tables['name']:
                     df_db = pd.read_sql(f"SELECT * FROM {target_table}", conn_old)
-                    # DB는 이미 태깅이 되어 있을 가능성이 높으므로 그대로 추가
                     all_data.append(df_db)
                 conn_old.close()
                 st.write(f"✅ [DB] {file.name} - 데이터 로드 완료")
