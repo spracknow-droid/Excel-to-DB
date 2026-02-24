@@ -7,13 +7,12 @@ import tempfile
 # 페이지 설정
 st.set_page_config(page_title="Excel & DB Merger", layout="wide")
 
-st.title("📊 통합 데이터 변환기 (계획 & 실적 & DB)")
-st.markdown("사이드바에서 각 카테고리에 맞는 파일들을 업로드해 주세요.")
+st.title("📊 통합 데이터 변환기 (컬럼 자동 수정)")
+st.markdown("판매계획의 컬럼명(`품명`, `판매금액`)을 표준 규격(`품목명`, `장부금액`)으로 자동 변환합니다.")
 
 # --- 사이드바: 3개 업로드 섹션 ---
 st.sidebar.header("📁 데이터 소스 업로드")
 
-# 1) 판매계획 (엑셀, 다중 가능)
 uploaded_plans = st.sidebar.file_uploader(
     "1️⃣ 판매계획 (xlsx)", 
     type=["xlsx"], 
@@ -21,7 +20,6 @@ uploaded_plans = st.sidebar.file_uploader(
     key="plan_uploader"
 )
 
-# 2) 판매실적 (엑셀, 다중 가능)
 uploaded_results = st.sidebar.file_uploader(
     "2️⃣ 판매실적 (xlsx)", 
     type=["xlsx"], 
@@ -29,7 +27,6 @@ uploaded_results = st.sidebar.file_uploader(
     key="result_uploader"
 )
 
-# 3) SQLite DB (DB, 다중 가능)
 uploaded_dbs = st.sidebar.file_uploader(
     "3️⃣ 기존 SQLite (db)", 
     type=["db"], 
@@ -37,20 +34,26 @@ uploaded_dbs = st.sidebar.file_uploader(
     key="db_uploader"
 )
 
-# 데이터를 통합 저장할 리스트
 all_data = []
 
-# --- 데이터 처리 로직 ---
 if uploaded_plans or uploaded_results or uploaded_dbs:
-    with st.status("파일 읽기 및 통합 중...", expanded=True) as status:
+    with st.status("파일 읽기 및 컬럼 변환 중...", expanded=True) as status:
         
-        # [Step 1] 판매계획 처리
+        # [Step 1] 판매계획 처리 (컬럼명 수정 로직 추가)
         for file in uploaded_plans:
             try:
                 df = pd.read_excel(file)
-                df['__데이터구분__'] = "판매계획" # 추후 필터링을 위한 구분값
+                
+                # 규칙 적용: 품명 -> 품목명, 판매금액 -> 장부금액
+                rename_rule = {
+                    '품명': '품목명',
+                    '판매금액': '장부금액'
+                }
+                df = df.rename(columns=rename_rule)
+                
+                df['__데이터구분__'] = "판매계획"
                 all_data.append(df)
-                st.write(f"✅ [계획] {file.name} 완료")
+                st.write(f"✅ [계획] {file.name} - 컬럼명 변환 완료")
             except Exception as e:
                 st.error(f"❌ {file.name} 읽기 실패: {e}")
 
@@ -64,18 +67,17 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
             except Exception as e:
                 st.error(f"❌ {file.name} 읽기 실패: {e}")
 
-        # [Step 3] SQLite DB 처리 (다중 DB 대응)
+        # [Step 3] SQLite DB 처리
         for file in uploaded_dbs:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp_file:
                 tmp_file.write(file.getvalue())
                 tmp_path = tmp_file.name
-            
             try:
                 conn_old = sqlite3.connect(tmp_path)
                 tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table';", conn_old)
-                for target_table in tables['name']: # DB 안의 모든 테이블 순회
+                for target_table in tables['name']:
                     df_db = pd.read_sql(f"SELECT * FROM {target_table}", conn_old)
-                    df_db['__데이터구분__'] = f"DB({file.name}_{target_table})"
+                    df_db['__데이터구분__'] = f"DB({file.name})"
                     all_data.append(df_db)
                 st.write(f"✅ [DB] {file.name} 로드 완료")
                 conn_old.close()
@@ -89,7 +91,7 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
         if all_data:
             combined_df = pd.concat(all_data, ignore_index=True)
             
-            # SQLite 호환성을 위한 타입 변환 (Object -> String)
+            # 타입 변환 (Object -> String)
             for col in combined_df.columns:
                 if combined_df[col].dtype == 'object':
                     combined_df[col] = combined_df[col].astype(str)
@@ -101,7 +103,7 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
             
             st.write(f"📝 전체 통합 결과: {final_count}행 (중복 {initial_count - final_count}행 삭제됨)")
 
-            # [Step 5] 다운로드 파일 생성
+            # [Step 5] DB 파일 생성
             db_filename = "integrated_sales_data.db"
             if os.path.exists(db_filename):
                 os.remove(db_filename)
@@ -110,10 +112,9 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
             combined_df.to_sql("total_data", conn_new, index=False, if_exists="replace")
             conn_new.close()
             
-            status.update(label="통합 완료!", state="complete", expanded=False)
+            status.update(label="통합 및 컬럼 변환 완료!", state="complete", expanded=False)
 
-            # 결과 미리보기 및 다운로드 버튼
-            st.subheader("📊 통합 데이터 미리보기")
+            st.subheader("📊 통합 데이터 미리보기 (장부금액 컬럼 확인)")
             st.dataframe(combined_df.head(10))
 
             with open(db_filename, "rb") as f:
@@ -124,4 +125,4 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                     mime="application/octet-stream"
                 )
 else:
-    st.info("사이드바에서 분석할 파일들을 업로드해 주세요.")
+    st.info("사이드바에서 파일을 업로드해 주세요.")
