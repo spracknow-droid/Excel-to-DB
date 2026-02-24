@@ -7,8 +7,8 @@ import tempfile
 # 페이지 설정
 st.set_page_config(page_title="Excel & DB Merger", layout="wide")
 
-st.title("📊 통합 데이터 변환기 (컬럼 자동 수정)")
-st.markdown("판매계획의 컬럼명(`품명`, `판매금액`)을 표준 규격(`품목명`, `장부금액`)으로 자동 변환합니다.")
+st.title("📊 통합 데이터 변환기 (전표번호 기준 분류)")
+st.markdown("'수익성계획전표번호'에 값이 있으면 판매계획(품명/판매금액 변경), 없으면 판매실적으로 분류합니다.")
 
 # --- 사이드바: 3개 업로드 섹션 ---
 st.sidebar.header("📁 데이터 소스 업로드")
@@ -36,34 +36,47 @@ uploaded_dbs = st.sidebar.file_uploader(
 
 all_data = []
 
-if uploaded_plans or uploaded_results or uploaded_dbs:
-    with st.status("파일 읽기 및 컬럼 변환 중...", expanded=True) as status:
+# 데이터 처리 함수
+def process_classification(df):
+    if '수익성계획전표번호' in df.columns:
+        # 값이 있는 경우 (판매계획)
+        is_plan = df['수익성계획전표번호'].notnull() & (df['수익성계획전표번호'].astype(str).str.strip() != "")
         
-        # [Step 1] 판매계획 처리 (컬럼명 수정 로직 추가)
+        # 판매계획 데이터 처리 (컬럼명 변경 규칙 적용)
+        df_plan = df[is_plan].copy()
+        if not df_plan.empty:
+            df_plan = df_plan.rename(columns={'품명': '품목명', '판매금액': '장부금액'})
+            df_plan['__데이터구분__'] = "판매계획"
+            all_data.append(df_plan)
+            
+        # 판매실적 데이터 처리
+        df_result = df[~is_plan].copy()
+        if not df_result.empty:
+            df_result['__데이터구분__'] = "판매실적"
+            all_data.append(df_result)
+    else:
+        # 컬럼이 없으면 기본적으로 판매실적으로 분류
+        df['__데이터구분__'] = "판매실적"
+        all_data.append(df)
+
+if uploaded_plans or uploaded_results or uploaded_dbs:
+    with st.status("파일 읽기 및 분류 로직 적용 중...", expanded=True) as status:
+        
+        # [Step 1] 판매계획 섹션 파일 처리
         for file in uploaded_plans:
             try:
                 df = pd.read_excel(file)
-                
-                # 규칙 적용: 품명 -> 품목명, 판매금액 -> 장부금액
-                rename_rule = {
-                    '품명': '품목명',
-                    '판매금액': '장부금액'
-                }
-                df = df.rename(columns=rename_rule)
-                
-                df['__데이터구분__'] = "판매계획"
-                all_data.append(df)
-                st.write(f"✅ [계획] {file.name} - 컬럼명 변환 완료")
+                process_classification(df)
+                st.write(f"✅ [계획섹션] {file.name} 처리 완료")
             except Exception as e:
                 st.error(f"❌ {file.name} 읽기 실패: {e}")
 
-        # [Step 2] 판매실적 처리
+        # [Step 2] 판매실적 섹션 파일 처리
         for file in uploaded_results:
             try:
                 df = pd.read_excel(file)
-                df['__데이터구분__'] = "판매실적"
-                all_data.append(df)
-                st.write(f"✅ [실적] {file.name} 완료")
+                process_classification(df)
+                st.write(f"✅ [실적섹션] {file.name} 처리 완료")
             except Exception as e:
                 st.error(f"❌ {file.name} 읽기 실패: {e}")
 
@@ -77,9 +90,8 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table';", conn_old)
                 for target_table in tables['name']:
                     df_db = pd.read_sql(f"SELECT * FROM {target_table}", conn_old)
-                    df_db['__데이터구분__'] = f"DB({file.name})"
-                    all_data.append(df_db)
-                st.write(f"✅ [DB] {file.name} 로드 완료")
+                    process_classification(df_db)
+                st.write(f"✅ [DB] {file.name} 로드 및 분류 완료")
                 conn_old.close()
             except Exception as e:
                 st.error(f"❌ {file.name} 로드 실패: {e}")
@@ -91,12 +103,10 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
         if all_data:
             combined_df = pd.concat(all_data, ignore_index=True)
             
-            # 타입 변환 (Object -> String)
             for col in combined_df.columns:
                 if combined_df[col].dtype == 'object':
                     combined_df[col] = combined_df[col].astype(str)
             
-            # 중복 제거
             initial_count = len(combined_df)
             combined_df = combined_df.drop_duplicates()
             final_count = len(combined_df)
@@ -112,9 +122,9 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
             combined_df.to_sql("total_data", conn_new, index=False, if_exists="replace")
             conn_new.close()
             
-            status.update(label="통합 및 컬럼 변환 완료!", state="complete", expanded=False)
+            status.update(label="통합 완료!", state="complete", expanded=False)
 
-            st.subheader("📊 통합 데이터 미리보기 (장부금액 컬럼 확인)")
+            st.subheader("📊 통합 데이터 미리보기")
             st.dataframe(combined_df.head(10))
 
             with open(db_filename, "rb") as f:
