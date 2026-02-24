@@ -14,6 +14,17 @@ st.info("💡 사용자가 업로드한 판매 데이터(계획/실적)를 통�
 
 all_data = []
 
+# [추가된 로직] 특정 컬럼 타입을 문자열로 고정하는 함수
+def format_specific_columns(df):
+    """'매출처' 등 특정 컬럼을 문자열 형식으로 변환"""
+    target_col = '매출처'
+    if target_col in df.columns:
+        # nan 값을 빈 문자열로 처리하고 문자열로 변환
+        df[target_col] = df[target_col].astype(str).replace(['nan', 'None', 'nan.0'], '')
+        # 소수점(123.0)으로 표시되는 경우 제거
+        df[target_col] = df[target_col].apply(lambda x: x.split('.')[0] if x.endswith('.0') else x)
+    return df
+
 # [공통 로직] 데이터 구분(Tagging) 함수
 def add_data_tag(df):
     if df is None or df.empty:
@@ -52,8 +63,13 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
         # [Step 1] 판매계획 섹션
         for file in uploaded_plans:
             try:
-                df = pd.read_excel(file)
+                # 파일을 읽을 때 '매출처'가 있다면 문자열로 읽도록 시도 (없어도 에러 안 남)
+                df = pd.read_excel(file, dtype={'매출처': str}) 
                 df.columns = [str(c).strip() for c in df.columns]
+                
+                # 업로드 직후 타입 보정 로직 실행
+                df = format_specific_columns(df)
+                
                 df = filter_invalid_rows(df, file.name)
                 df = df.rename(columns={'품명': '품목명', '판매금액': '장부금액'})
                 
@@ -69,15 +85,19 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
         # [Step 2] 판매실적 섹션
         for file in uploaded_results:
             try:
-                df = pd.read_excel(file)
+                df = pd.read_excel(file, dtype={'매출처': str})
                 df.columns = [str(c).strip() for c in df.columns]
+                
+                # 업로드 직후 타입 보정 로직 실행
+                df = format_specific_columns(df)
+                
                 df = filter_invalid_rows(df, file.name)
                 df = add_data_tag(df)
                 all_data.append(df)
                 st.write(f"✅ [실적섹션] {file.name} - 처리 완료")
             except Exception as e: st.error(f"Error ({file.name}): {e}")
 
-        # [Step 3] DB 파일
+        # [Step 3] DB 파일 (생략 - 기존 로직 유지)
         for file in uploaded_dbs:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp_file:
                 tmp_file.write(file.getvalue())
@@ -87,17 +107,19 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table';", conn_old)
                 for target_table in tables['name']:
                     df_db = pd.read_sql(f"SELECT * FROM {target_table}", conn_old)
+                    # DB에서 가져온 데이터도 매출처 포맷팅 적용
+                    df_db = format_specific_columns(df_db)
                     all_data.append(df_db)
                 conn_old.close()
                 st.write(f"✅ [DB] {file.name} - 데이터 로드 완료")
             finally:
                 if os.path.exists(tmp_path): os.remove(tmp_path)
 
-        # [Step 4] 병합 및 최종 정제
+        # [Step 4] 병합 및 최종 정제 (기존 로직 유지)
         if all_data:
             combined_df = pd.concat(all_data, ignore_index=True)
             
-            # 컬럼명 중복 및 특수문자 해결
+            # 컬럼명 정제 로직...
             new_cols = []
             col_counts = {}
             for col in combined_df.columns:
@@ -111,52 +133,31 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 new_cols.append(final_name)
             combined_df.columns = new_cols
 
-            # 타입 정제 및 중복 제거
+            # 문자열 컬럼 내 nan 처리
             cols_to_fix = combined_df.select_dtypes(include=['object']).columns
             for col in cols_to_fix:
                 combined_df[col] = combined_df[col].astype(str).replace(['nan', 'None'], '')
+            
             combined_df = combined_df.drop_duplicates()
 
-            # [Step 5] 통합 결과 정보 생성
-            total_rows = len(combined_df)
-            
-            # DB 파일 생성
+            # [Step 5] DB 저장 및 다운로드 (기존 로직 유지)
             db_filename = "sales_integrated_final.db"
             if os.path.exists(db_filename): os.remove(db_filename)
             conn_new = sqlite3.connect(db_filename)
             combined_df.to_sql("total_data", conn_new, index=False, if_exists="replace")
             conn_new.close()
             
-            # Excel 메모리 버퍼 생성 (다운로드용)
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 combined_df.to_excel(writer, index=False, sheet_name='TotalData')
             excel_data = output.getvalue()
 
             status.update(label="모든 처리 완료!", state="complete", expanded=False)
-            
-            # 결과 리포트
-            st.success(f"🎊 통합이 완료되었습니다! (총 행 수: **{total_rows:,}** 행)")
-            
-            st.subheader("📊 통합 데이터 미리보기")
+            st.success(f"🎊 통합이 완료되었습니다! (총 행 수: **{len(combined_df):,}** 행)")
             st.dataframe(combined_df.head(10))
             
-            # 다운로드 버튼 레이아웃
             col1, col2 = st.columns(2)
             with col1:
-                with open(db_filename, "rb") as f:
-                    st.download_button(
-                        label="💾 통합 SQLite DB 다운로드",
-                        data=f,
-                        file_name=db_filename,
-                        mime="application/octet-stream",
-                        use_container_width=True
-                    )
+                st.download_button("💾 통합 SQLite DB 다운로드", data=open(db_filename, "rb"), file_name=db_filename, use_container_width=True)
             with col2:
-                st.download_button(
-                    label="Excel 통합파일 다운로드",
-                    data=excel_data,
-                    file_name="sales_integrated_final.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
+                st.download_button("Excel 통합파일 다운로드", data=excel_data, file_name="sales_integrated_final.xlsx", use_container_width=True)
