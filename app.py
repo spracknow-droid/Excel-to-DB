@@ -17,7 +17,7 @@ all_data = []
 # [함수] 특정 컬럼 타입을 문자열로 고정 및 데이터 클리닝
 def format_specific_columns(df):
     """'매출처' 등 코드 성격의 컬럼을 깨끗한 문자열 형식으로 변환"""
-    target_cols = ['매출처', '품목명', '품번'] 
+    target_cols = ['매출처', '품목명', '품번', '품목'] # '품목' 추가
     for col in target_cols:
         if col in df.columns:
             df[col] = df[col].astype(str).replace(['nan', 'None', 'nan.0'], '')
@@ -30,7 +30,6 @@ def add_data_tag(df):
     if df is None or df.empty:
         return df
     
-    # 이미 데이터구분 컬럼이 있는 경우 새로 만들지 않고 유지
     tag_col = '__데이터구분__'
     if tag_col in df.columns:
         return df
@@ -67,13 +66,22 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
         # [Step 1] 판매계획 처리
         for file in uploaded_plans:
             try:
-                df = pd.read_excel(file, dtype={'매출처': str})
+                df = pd.read_excel(file, dtype={'매출처': str, '품목코드': str})
                 df.columns = [str(c).strip() for c in df.columns]
+
+                # 🚀 요구사항 반영: 컬럼명 변경 (품목코드 -> 품목, 판매수량 -> 수량)
+                df = df.rename(columns={
+                    '품목코드': '품목',
+                    '판매수량': '수량',
+                    '품명': '품목명', 
+                    '판매금액': '장부금액'
+                })
+
                 df = format_specific_columns(df)
                 df = filter_invalid_rows(df, file.name)
-                df = df.rename(columns={'품명': '품목명', '판매금액': '장부금액'})
                 
-                qty = pd.to_numeric(df.get('판매수량', 0), errors='coerce').fillna(0)
+                # 수량/단가 기반 계산 (변경된 컬럼명 '수량' 사용)
+                qty = pd.to_numeric(df.get('수량', 0), errors='coerce').fillna(0)
                 price = pd.to_numeric(df.get('판매단가', 0), errors='coerce').fillna(0)
                 df['판매금액'] = qty * price
                 
@@ -111,7 +119,7 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
             finally:
                 if os.path.exists(tmp_path): os.remove(tmp_path)
 
-        # [Step 4] 통합 데이터 최종 정제 (중복 컬럼 통합 로직 핵심)
+        # [Step 4] 통합 데이터 최종 정제
         if all_data:
             combined_df = pd.concat(all_data, ignore_index=True)
             
@@ -123,15 +131,12 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 clean_names.append(c_name if c_name else "unnamed")
             combined_df.columns = clean_names
 
-            # 2. ★ 중복 컬럼 통합 (동일 이름 컬럼을 하나로 합침)
-            # 이름이 같은 컬럼들이 있으면 첫 번째 컬럼에 데이터를 합치고 나머지는 삭제
+            # 2. 중복 컬럼 통합
             duplicated_col_list = combined_df.columns[combined_df.columns.duplicated()].unique()
             if not duplicated_col_list.empty:
                 for col_name in duplicated_col_list:
-                    # 동일 이름을 가진 컬럼들만 추출하여 가로로 통합(ffill)
                     cols_to_merge = combined_df.loc[:, combined_df.columns == col_name]
                     merged_values = cols_to_merge.ffill(axis=1).iloc[:, -1]
-                    # 원본에서 해당 이름 컬럼 모두 제거 후 병합된 컬럼 하나만 삽입
                     combined_df = combined_df.loc[:, combined_df.columns != col_name]
                     combined_df[col_name] = merged_values
                 st.info(f"💡 중복된 컬럼({', '.join(duplicated_col_list)})을 자동으로 통합하였습니다.")
@@ -165,7 +170,8 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 
                 c1, c2 = st.columns(2)
                 with c1:
-                    st.download_button("💾 통합 DB 다운로드", data=open(db_filename, "rb"), file_name=db_filename, use_container_width=True)
+                    with open(db_filename, "rb") as f:
+                        st.download_button("💾 통합 DB 다운로드", data=f, file_name=db_filename, use_container_width=True)
                 with c2:
                     st.download_button("📑 통합 Excel 다운로드", data=excel_data, file_name="sales_integrated_final.xlsx", use_container_width=True)
             except Exception as e:
