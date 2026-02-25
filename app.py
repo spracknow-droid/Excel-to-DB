@@ -17,12 +17,24 @@ all_data = []
 # [함수] 특정 컬럼 타입을 문자열로 고정 및 데이터 클리닝
 def format_specific_columns(df):
     """'매출처' 등 코드 성격의 컬럼을 깨끗한 문자열 형식으로 변환"""
-    target_cols = ['매출처', '품목'] 
+    target_cols = ['매출처', '수금처', '납품처', '품목', '품목명', '품번'] 
     for col in target_cols:
         if col in df.columns:
             df[col] = df[col].astype(str).replace(['nan', 'None', 'nan.0'], '')
             df[col] = df[col].apply(lambda x: x.split('.')[0] if x.endswith('.0') else x)
             df[col] = df[col].str.strip()
+    return df
+
+# [함수] 날짜 컬럼에서 시간 정보를 제거하고 YYYY-MM-DD 형식으로 통일
+def clean_date_columns(df):
+    """엑셀의 '12:00:00 AM' 같은 시간 정보를 제거"""
+    date_target_cols = ['계획년월', '매출일', '수금예정일', '출고일']
+    for col in date_target_cols:
+        if col in df.columns:
+            # 날짜형으로 변환 시도 (변환 안 되는 값은 NaT)
+            df[col] = pd.to_datetime(df[col], errors='coerce')
+            # YYYY-MM-DD 형식의 문자열로 변환 (빈 값은 빈 문자열 처리)
+            df[col] = df[col].dt.strftime('%Y-%m-%d').fillna('')
     return df
 
 # [공통 로직] 데이터 구분(Tagging) 함수
@@ -78,18 +90,18 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 })
 
                 df = format_specific_columns(df)
+                df = clean_date_columns(df) # 🚀 날짜 정제 추가
                 df = filter_invalid_rows(df, file.name)
                 
                 # 수량 및 장부금액 숫자 변환
                 qty = pd.to_numeric(df.get('수량', 0), errors='coerce').fillna(0)
                 book_amt = pd.to_numeric(df.get('장부금액', 0), errors='coerce').fillna(0)
                 
-                # 🚀 요구사항 반영: '장부단가' 컬럼 생성 (장부금액 / 수량)
-                # 수량이 0인 경우 0으로 처리하여 에러 방지
+                # 장부단가 생성 (장부금액 / 수량)
                 df['장부단가'] = book_amt / qty.replace(0, pd.NA)
                 df['장부단가'] = df['장부단가'].fillna(0)
                 
-                # 판매단가 기반 판매금액 재계산 (기존 로직 유지)
+                # 판매단가 기반 판매금액 재계산
                 price = pd.to_numeric(df.get('판매단가', 0), errors='coerce').fillna(0)
                 df['판매금액'] = qty * price
                 
@@ -103,14 +115,34 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
             try:
                 df = pd.read_excel(file, dtype={'매출처': str, '수금처' : str, '납품처' : str, '품목': str})
                 df.columns = [str(c).strip() for c in df.columns]
+                
                 df = format_specific_columns(df)
+                df = clean_date_columns(df) # 🚀 날짜 정제 추가
                 df = filter_invalid_rows(df, file.name)
                 df = add_data_tag(df)
                 all_data.append(df)
                 st.write(f"✅ [실적] {file.name}")
             except Exception as e: st.error(f"Error ({file.name}): {e}")
 
-        # [Step 4] 통합 데이터 최종 정제 및 저장 (이하 로직 동일)
+        # [Step 3] 기존 DB 로드 (추가됨)
+        for file in uploaded_dbs:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp_file:
+                tmp_file.write(file.getvalue())
+                tmp_path = tmp_file.name
+            try:
+                conn_old = sqlite3.connect(tmp_path)
+                tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table';", conn_old)
+                for target_table in tables['name']:
+                    df_db = pd.read_sql(f"SELECT * FROM {target_table}", conn_old)
+                    df_db = format_specific_columns(df_db)
+                    df_db = clean_date_columns(df_db) # 🚀 기존 DB 데이터도 날짜 정제
+                    all_data.append(df_db)
+                conn_old.close()
+                st.write(f"✅ [기존 DB] {file.name}")
+            finally:
+                if os.path.exists(tmp_path): os.remove(tmp_path)
+
+        # [Step 4] 통합 데이터 최종 정제 및 저장
         if all_data:
             combined_df = pd.concat(all_data, ignore_index=True)
             
