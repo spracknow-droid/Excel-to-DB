@@ -17,7 +17,7 @@ all_data = []
 # [함수] 특정 컬럼 타입을 문자열로 고정 및 데이터 클리닝
 def format_specific_columns(df):
     """'매출처' 등 코드 성격의 컬럼을 깨끗한 문자열 형식으로 변환"""
-    target_cols = ['매출처', '품목명', '품번', '품목'] 
+    target_cols = ['매출처', '품목'] 
     for col in target_cols:
         if col in df.columns:
             df[col] = df[col].astype(str).replace(['nan', 'None', 'nan.0'], '')
