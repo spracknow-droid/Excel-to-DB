@@ -30,7 +30,7 @@ def add_data_tag(df):
     if df is None or df.empty:
         return df
     
-    # 이미 데이터구분 컬럼이 있는 경우 중복 생성을 방지
+    # 이미 데이터구분 컬럼이 있는 경우 새로 만들지 않고 유지
     tag_col = '__데이터구분__'
     if tag_col in df.columns:
         return df
@@ -50,7 +50,6 @@ def filter_invalid_rows(df, filename):
         df = df.dropna(subset=['No'])
         df = df[df['No'].astype(str).str.strip() != ""]
         final_len = len(df)
-        
         if initial_len > final_len:
             st.warning(f"⚠️ {filename}: 'No' 값이 없는 {initial_len - final_len}개의 행이 제외되었습니다.")
         return df.reset_index(drop=True)
@@ -63,7 +62,7 @@ uploaded_results = st.sidebar.file_uploader("2️⃣ 판매실적 (xlsx)", type=
 uploaded_dbs = st.sidebar.file_uploader("3️⃣ 기존 SQLite (db)", type=["db"], accept_multiple_files=True)
 
 if uploaded_plans or uploaded_results or uploaded_dbs:
-    with st.status("데이터 통합 및 DB 최적화 중...", expanded=True) as status:
+    with st.status("데이터 통합 및 최적화 진행 중...", expanded=True) as status:
         
         # [Step 1] 판매계획 처리
         for file in uploaded_plans:
@@ -80,7 +79,7 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 
                 df = add_data_tag(df)
                 all_data.append(df)
-                st.write(f"✅ [계획] {file.name} 처리 완료")
+                st.write(f"✅ [계획] {file.name}")
             except Exception as e: st.error(f"Error ({file.name}): {e}")
 
         # [Step 2] 판매실적 처리
@@ -92,7 +91,7 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 df = filter_invalid_rows(df, file.name)
                 df = add_data_tag(df)
                 all_data.append(df)
-                st.write(f"✅ [실적] {file.name} 처리 완료")
+                st.write(f"✅ [실적] {file.name}")
             except Exception as e: st.error(f"Error ({file.name}): {e}")
 
         # [Step 3] 기존 DB 로드
@@ -108,32 +107,39 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                     df_db = format_specific_columns(df_db)
                     all_data.append(df_db)
                 conn_old.close()
-                st.write(f"✅ [기존 DB] {file.name} 데이터 로드 완료")
+                st.write(f"✅ [기존 DB] {file.name}")
             finally:
                 if os.path.exists(tmp_path): os.remove(tmp_path)
 
-        # [Step 4] 통합 데이터 최종 정제 (중복 컬럼 오류 방지)
+        # [Step 4] 통합 데이터 최종 정제 (중복 컬럼 통합 로직 핵심)
         if all_data:
             combined_df = pd.concat(all_data, ignore_index=True)
             
-            # 1. 컬럼명 1차 정제 (특수문자 제거 및 이름 통일)
-            raw_clean_names = []
+            # 1. 컬럼명 표준화 (특수문자 제거)
+            clean_names = []
             for col in combined_df.columns:
-                # 특수문자를 언더바(_)로 바꾸고 연속된 언더바 제거
-                clean_name = re.sub(r'[^a-zA-Z0-9가-힣]', '_', str(col)).strip('_')
-                clean_name = re.sub(r'_+', '_', clean_name) 
-                raw_clean_names.append(clean_name if clean_name else "unnamed")
-            
-            combined_df.columns = raw_clean_names
+                c_name = re.sub(r'[^a-zA-Z0-9가-힣]', '_', str(col)).strip('_')
+                c_name = re.sub(r'_+', '_', c_name)
+                clean_names.append(c_name if c_name else "unnamed")
+            combined_df.columns = clean_names
 
-            # 2. ★ 핵심: 이름이 완전히 똑같아진 컬럼들은 하나로 병합 (중복 제거)
-            # duplicated()는 첫 번째 컬럼 외의 중복들을 찾음
-            combined_df = combined_df.loc[:, ~combined_df.columns.duplicated()]
+            # 2. ★ 중복 컬럼 통합 (동일 이름 컬럼을 하나로 합침)
+            # 이름이 같은 컬럼들이 있으면 첫 번째 컬럼에 데이터를 합치고 나머지는 삭제
+            duplicated_col_list = combined_df.columns[combined_df.columns.duplicated()].unique()
+            if not duplicated_col_list.empty:
+                for col_name in duplicated_col_list:
+                    # 동일 이름을 가진 컬럼들만 추출하여 가로로 통합(ffill)
+                    cols_to_merge = combined_df.loc[:, combined_df.columns == col_name]
+                    merged_values = cols_to_merge.ffill(axis=1).iloc[:, -1]
+                    # 원본에서 해당 이름 컬럼 모두 제거 후 병합된 컬럼 하나만 삽입
+                    combined_df = combined_df.loc[:, combined_df.columns != col_name]
+                    combined_df[col_name] = merged_values
+                st.info(f"💡 중복된 컬럼({', '.join(duplicated_col_list)})을 자동으로 통합하였습니다.")
 
-            # 3. 데이터 타입 및 결측치 클리닝
+            # 3. 데이터 클리닝 및 중복 행 제거
             obj_cols = combined_df.select_dtypes(include=['object']).columns
             for col in obj_cols:
-                combined_df[col] = combined_df[col].fillna('').astype(str).replace(['nan', 'None'], '')
+                combined_df[col] = combined_df[col].fillna('').astype(str).replace(['nan', 'None', 'nan.0'], '')
             
             combined_df = combined_df.drop_duplicates()
 
@@ -153,16 +159,14 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                     combined_df.to_excel(writer, index=False, sheet_name='TotalData')
                 excel_data = output.getvalue()
 
-                status.update(label="✅ 모든 통합 작업 완료!", state="complete", expanded=False)
-                st.success(f"🎊 통합이 완료되었습니다! (총 행 수: **{len(combined_df):,}** 행)")
-                st.subheader("📊 통합 데이터 미리보기 (상위 10행)")
+                status.update(label="✅ 통합 완료!", state="complete", expanded=False)
+                st.success(f"🎊 총 **{len(combined_df):,}** 행의 데이터가 통합되었습니다.")
                 st.dataframe(combined_df.head(10))
                 
-                col1, col2 = st.columns(2)
-                with col1:
-                    with open(db_filename, "rb") as f:
-                        st.download_button("💾 통합 SQLite DB 다운로드", data=f, file_name=db_filename, use_container_width=True)
-                with col2:
-                    st.download_button("📑 Excel 통합파일 다운로드", data=excel_data, file_name="sales_integrated_final.xlsx", use_container_width=True)
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.download_button("💾 통합 DB 다운로드", data=open(db_filename, "rb"), file_name=db_filename, use_container_width=True)
+                with c2:
+                    st.download_button("📑 통합 Excel 다운로드", data=excel_data, file_name="sales_integrated_final.xlsx", use_container_width=True)
             except Exception as e:
-                st.error(f"❌ DB 저장 중 오류 발생: {e}")
+                st.error(f"❌ DB 저장 중 오류: {e}")
