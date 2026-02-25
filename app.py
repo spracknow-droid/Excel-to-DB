@@ -17,7 +17,7 @@ all_data = []
 # [함수] 특정 컬럼 타입을 문자열로 고정 및 데이터 클리닝
 def format_specific_columns(df):
     """'매출처' 등 코드 성격의 컬럼을 깨끗한 문자열 형식으로 변환"""
-    target_cols = ['매출처', '품목명', '품번', '품목'] # '품목' 추가
+    target_cols = ['매출처', '품목명', '품번', '품목'] 
     for col in target_cols:
         if col in df.columns:
             df[col] = df[col].astype(str).replace(['nan', 'None', 'nan.0'], '')
@@ -69,7 +69,7 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 df = pd.read_excel(file, dtype={'매출처': str, '품목코드': str})
                 df.columns = [str(c).strip() for c in df.columns]
 
-                # 🚀 요구사항 반영: 컬럼명 변경 (품목코드 -> 품목, 판매수량 -> 수량)
+                # 컬럼명 변경 (품목코드 -> 품목, 판매수량 -> 수량)
                 df = df.rename(columns={
                     '품목코드': '품목',
                     '판매수량': '수량',
@@ -80,8 +80,16 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 df = format_specific_columns(df)
                 df = filter_invalid_rows(df, file.name)
                 
-                # 수량/단가 기반 계산 (변경된 컬럼명 '수량' 사용)
+                # 수량 및 장부금액 숫자 변환
                 qty = pd.to_numeric(df.get('수량', 0), errors='coerce').fillna(0)
+                book_amt = pd.to_numeric(df.get('장부금액', 0), errors='coerce').fillna(0)
+                
+                # 🚀 요구사항 반영: '장부단가' 컬럼 생성 (장부금액 / 수량)
+                # 수량이 0인 경우 0으로 처리하여 에러 방지
+                df['장부단가'] = book_amt / qty.replace(0, pd.NA)
+                df['장부단가'] = df['장부단가'].fillna(0)
+                
+                # 판매단가 기반 판매금액 재계산 (기존 로직 유지)
                 price = pd.to_numeric(df.get('판매단가', 0), errors='coerce').fillna(0)
                 df['판매금액'] = qty * price
                 
@@ -102,28 +110,10 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 st.write(f"✅ [실적] {file.name}")
             except Exception as e: st.error(f"Error ({file.name}): {e}")
 
-        # [Step 3] 기존 DB 로드
-        for file in uploaded_dbs:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp_file:
-                tmp_file.write(file.getvalue())
-                tmp_path = tmp_file.name
-            try:
-                conn_old = sqlite3.connect(tmp_path)
-                tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table';", conn_old)
-                for target_table in tables['name']:
-                    df_db = pd.read_sql(f"SELECT * FROM {target_table}", conn_old)
-                    df_db = format_specific_columns(df_db)
-                    all_data.append(df_db)
-                conn_old.close()
-                st.write(f"✅ [기존 DB] {file.name}")
-            finally:
-                if os.path.exists(tmp_path): os.remove(tmp_path)
-
-        # [Step 4] 통합 데이터 최종 정제
+        # [Step 4] 통합 데이터 최종 정제 및 저장 (이하 로직 동일)
         if all_data:
             combined_df = pd.concat(all_data, ignore_index=True)
             
-            # 1. 컬럼명 표준화 (특수문자 제거)
             clean_names = []
             for col in combined_df.columns:
                 c_name = re.sub(r'[^a-zA-Z0-9가-힣]', '_', str(col)).strip('_')
@@ -131,7 +121,6 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                 clean_names.append(c_name if c_name else "unnamed")
             combined_df.columns = clean_names
 
-            # 2. 중복 컬럼 통합
             duplicated_col_list = combined_df.columns[combined_df.columns.duplicated()].unique()
             if not duplicated_col_list.empty:
                 for col_name in duplicated_col_list:
@@ -141,14 +130,12 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
                     combined_df[col_name] = merged_values
                 st.info(f"💡 중복된 컬럼({', '.join(duplicated_col_list)})을 자동으로 통합하였습니다.")
 
-            # 3. 데이터 클리닝 및 중복 행 제거
             obj_cols = combined_df.select_dtypes(include=['object']).columns
             for col in obj_cols:
                 combined_df[col] = combined_df[col].fillna('').astype(str).replace(['nan', 'None', 'nan.0'], '')
             
             combined_df = combined_df.drop_duplicates()
 
-            # [Step 5] SQLite DB 저장
             db_filename = "sales_integrated_final.db"
             if os.path.exists(db_filename):
                 try: os.remove(db_filename)
