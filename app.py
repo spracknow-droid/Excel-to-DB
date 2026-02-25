@@ -101,7 +101,7 @@ if uploaded_plans or uploaded_results or uploaded_dbs:
         # [Step 2] 판매실적 처리
         for file in uploaded_results:
             try:
-                df = pd.read_excel(file, dtype={'매출처': str})
+                df = pd.read_excel(file, dtype={'매출처': str, '수금처' : str, '납품처' : str, '품목': str})
                 df.columns = [str(c).strip() for c in df.columns]
                 df = format_specific_columns(df)
                 df = filter_invalid_rows(df, file.name)
