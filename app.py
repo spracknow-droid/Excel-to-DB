@@ -5,7 +5,6 @@ import os
 import io
 from processor import clean_data
 
-# --- 💡 세션 기반 메모리 DB 초기화 ---
 if 'db_conn' not in st.session_state:
     st.session_state.db_conn = sqlite3.connect(':memory:', check_same_thread=False)
 
@@ -34,63 +33,58 @@ if uploaded_db:
     os.remove("temp_uploaded.db")
     st.sidebar.success("✅ DB 파일 로드 완료")
 
-# --- 로직 2: 엑셀 파일 처리 (업로드 즉시 전처리) ---
+# --- 로직 2: 엑셀 파일 처리 ---
 if excel_files:
     for file in excel_files:
-        # [수정] 읽기 시점부터 모든 컬럼을 문자열로 읽어 데이터 변형 방지
-        df = pd.read_excel(file, dtype=str)
         fname = file.name
-
-        # 파일명에 따른 테이블 지정 및 즉시 전처리 수행
+        
+        # [정밀 수정] 파일 유형별로 문자열로 지켜야 할 컬럼 지정
+        str_converters = {}
         if "SLSSPN" in fname:
             target_table = "plan_data"
-            df = clean_data(df, "SLSSPN")
+            target_type = "SLSSPN"
+            str_converters = {'매출처': str, '품목코드': str}
         elif "BILBIV" in fname:
             target_table = "actual_data"
-            df = clean_data(df, "BILBIV")
-            if '매출번호' in df.columns:
-                df = df[df['매출번호'].astype(str).str.contains('합계') == False]
+            target_type = "BILBIV"
+            str_converters = {'매출처': str, '품목': str, '수금처': str, '납품처': str}
         else:
             continue
 
-        try:
-            # 기존 컬럼 구조 확인
-            existing_columns = pd.read_sql(f"SELECT * FROM {target_table} LIMIT 0", conn).columns.tolist()
+        # 엑셀 읽기: 지정된 컬럼은 str로 유지, 수량/금액 등 나머지는 자동으로 읽음
+        df = pd.read_excel(file, converters=str_converters)
+        
+        # 전처리 (공백 제거 및 날짜 변환)
+        df = clean_data(df, target_type)
 
-            # 신규 업로드 시 기존 DB에 없는 컬럼이 있으면 None으로 보정
+        # 매출리스트 합계 제외 로직
+        if target_type == "BILBIV" and '매출번호' in df.columns:
+            df = df[df['매출번호'].astype(str).str.contains('합계') == False]
+
+        try:
+            existing_columns = pd.read_sql(f"SELECT * FROM {target_table} LIMIT 0", conn).columns.tolist()
             for col in existing_columns:
                 if col not in df.columns:
                     df[col] = None
             
-            # 기존 DB 구조가 있다면 컬럼 순서를 맞춤
             if existing_columns:
                 df = df[existing_columns]
                 
             df.to_sql(target_table, conn, if_exists="append", index=False)
-
         except Exception:
-            # 테이블이 없으면 전처리된 상태 그대로 신규 생성
             df.to_sql(target_table, conn, if_exists="replace", index=False)
 
-        # SQL 기반 중복 제거
+        # SQL 중복 제거
         safe_columns = [f'"{col}"' for col in df.columns]
         group_cols = ", ".join(safe_columns)
-
         try:
-            conn.execute(f"""
-                DELETE FROM {target_table}
-                WHERE rowid NOT IN (
-                    SELECT MIN(rowid)
-                    FROM {target_table}
-                    GROUP BY {group_cols}
-                )
-            """)
+            conn.execute(f"DELETE FROM {target_table} WHERE rowid NOT IN (SELECT MIN(rowid) FROM {target_table} GROUP BY {group_cols})")
             conn.commit()
-            st.success(f"✅ {fname} 전처리 및 누적 완료")
+            st.success(f"✅ {fname} 반영 완료")
         except sqlite3.OperationalError as e:
             st.error(f"⚠️ {fname} SQL 오류: {e}")
 
-# --- 데이터 확인 탭 ---
+# --- 데이터 확인 및 내보내기 로직 (이하 동일) ---
 st.divider()
 tab1, tab2 = st.tabs(["판매계획 (Plan)", "매출리스트 (Actual)"])
 
@@ -112,7 +106,6 @@ with tab2:
         else: st.info("데이터가 비어있습니다.")
     except: st.info("데이터가 없습니다.")
 
-# --- 내보내기 ---
 st.divider()
 col1, col2 = st.columns(2)
 with col1:
