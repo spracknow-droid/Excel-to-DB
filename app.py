@@ -3,7 +3,7 @@ import pandas as pd
 import sqlite3
 import os
 import io
-from processor import clean_data  # 새로 만든 전처리 로직 임포트
+from processor import clean_data
 
 # --- 💡 세션 기반 메모리 DB 초기화 ---
 if 'db_conn' not in st.session_state:
@@ -14,7 +14,7 @@ conn = st.session_state.db_conn
 st.set_page_config(page_title="데이터 통합 도구", layout="wide")
 st.title("🔋 세션 기반 실시간 데이터 통합")
 
-# --- 사이드바 ---
+# --- 사이드바: 초기화 버튼 삭제 ---
 with st.sidebar:
     st.header("📂 데이터 업로드")
     excel_files = st.file_uploader(
@@ -24,10 +24,6 @@ with st.sidebar:
     )
     st.divider()
     uploaded_db = st.file_uploader("2️⃣ 기존 SQLite DB 파일 (.db)", type=["db"])
-    
-    if st.sidebar.button("🗑 전체 데이터 초기화"):
-        st.session_state.db_conn = sqlite3.connect(':memory:', check_same_thread=False)
-        st.rerun()
 
 # --- 로직 1: 업로드된 DB 파일 처리 ---
 if uploaded_db:
@@ -46,10 +42,10 @@ if excel_files:
 
         if "SLSSPN" in fname:
             target_table = "plan_data"
-            df = clean_data(df, "SLSSPN")  # 전처리 호출
+            df = clean_data(df, "SLSSPN")
         elif "BILBIV" in fname:
             target_table = "actual_data"
-            df = clean_data(df, "BILBIV")  # 전처리 호출
+            df = clean_data(df, "BILBIV")
             if '매출번호' in df.columns:
                 df = df[df['매출번호'].astype(str).str.contains('합계') == False]
         else:
@@ -59,20 +55,17 @@ if excel_files:
             # 기존 컬럼 구조 확인
             existing_columns = pd.read_sql(f"SELECT * FROM {target_table} LIMIT 0", conn).columns.tolist()
 
-            # 누락 컬럼 보정
             for col in existing_columns:
                 if col not in df.columns:
                     df[col] = None
             
-            # 컬럼 순서 일치 및 추가 데이터만 필터링
             df = df[existing_columns]
             df.to_sql(target_table, conn, if_exists="append", index=False)
 
         except Exception:
-            # 테이블 신규 생성
             df.to_sql(target_table, conn, if_exists="replace", index=False)
 
-        # --- SQL 기반 중복 제거 (쌍따옴표 처리로 에러 방지) ---
+        # SQL 기반 중복 제거
         safe_columns = [f'"{col}"' for col in df.columns]
         group_cols = ", ".join(safe_columns)
 
