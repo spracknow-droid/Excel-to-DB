@@ -8,8 +8,12 @@ import io
 if 'db_conn' not in st.session_state:
     st.session_state.db_conn = sqlite3.connect(':memory:', check_same_thread=False)
     conn = st.session_state.db_conn
-    conn.execute("CREATE TABLE IF NOT EXISTS plan_data (id INTEGER PRIMARY KEY AUTOINCREMENT)")
-    conn.execute("CREATE TABLE IF NOT EXISTS actual_data (id INTEGER PRIMARY KEY AUTOINCREMENT)")
+    # id 컬럼 없이 테이블 생성 (데이터 업로드 시 구조가 결정됨)
+    conn.execute("CREATE TABLE IF NOT EXISTS plan_data (dummy TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS actual_data (dummy TEXT)")
+    # 초기화를 위한 더미 삭제
+    conn.execute("DELETE FROM plan_data")
+    conn.execute("DELETE FROM actual_data")
 
 conn = st.session_state.db_conn
 
@@ -58,7 +62,7 @@ if excel_files:
             
         # 컬럼 불일치로 인한 OperationalError 방지를 위한 병합 처리
         try:
-            # 기본 추가 시도
+            # 기본 추가 시도 (id 컬럼 없이 저장)
             df.to_sql(target_table, conn, if_exists="append", index=False)
             st.success(f"✅ {fname} 추가 완료")
         except:
@@ -69,7 +73,7 @@ if excel_files:
                 combined_df.to_sql(target_table, conn, if_exists="replace", index=False)
                 st.success(f"✅ {fname} 구조 조정 후 병합 완료")
             except:
-                # 테이블이 비어있을 경우 신규 생성
+                # 테이블이 비어있거나 초기화 상태일 경우 신규 생성
                 df.to_sql(target_table, conn, if_exists="replace", index=False)
                 st.success(f"✅ {fname} 신규 저장됨")
 
