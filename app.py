@@ -8,10 +8,9 @@ import io
 if 'db_conn' not in st.session_state:
     st.session_state.db_conn = sqlite3.connect(':memory:', check_same_thread=False)
     conn = st.session_state.db_conn
-    # id 컬럼 없이 테이블 생성 (데이터 업로드 시 구조가 결정됨)
+    # id 컬럼 없이 테이블 생성
     conn.execute("CREATE TABLE IF NOT EXISTS plan_data (dummy TEXT)")
     conn.execute("CREATE TABLE IF NOT EXISTS actual_data (dummy TEXT)")
-    # 초기화를 위한 더미 삭제
     conn.execute("DELETE FROM plan_data")
     conn.execute("DELETE FROM actual_data")
 
@@ -24,7 +23,6 @@ st.title("🔋 세션 기반 실시간 데이터 통합")
 with st.sidebar:
     st.header("📂 데이터 업로드")
     
-    # 1. 엑셀 파일 업로드 (여러 개 가능)
     excel_files = st.file_uploader(
         "1️⃣ 시스템 엑셀 파일 (SLSSPN / BILBIV)", 
         type=["xlsx", "xls"], 
@@ -33,7 +31,6 @@ with st.sidebar:
     
     st.divider()
     
-    # 2. 기존 SQLite DB 파일 업로드 (기존 세션 복원용)
     uploaded_db = st.file_uploader("2️⃣ 기존 SQLite DB 파일 (.db)", type=["db"])
 
 # --- 로직 1: 업로드된 DB 파일 처리 ---
@@ -45,11 +42,14 @@ if uploaded_db:
     os.remove("temp_uploaded.db")
     st.sidebar.success("✅ DB 파일 로드 완료")
 
-# --- 로직 2: 엑셀 파일 처리 (에러 방지 로직 포함) ---
+# --- 로직 2: 엑셀 파일 처리 ---
 if excel_files:
     for file in excel_files:
         df = pd.read_excel(file)
         fname = file.name
+        
+        # 중복 행 삭제 (핵심 수정 사항)
+        df = df.drop_duplicates()
         
         if "SLSSPN" in fname:
             target_table = "plan_data"
@@ -60,20 +60,19 @@ if excel_files:
         else:
             continue
             
-        # 컬럼 불일치로 인한 OperationalError 방지를 위한 병합 처리
         try:
-            # 기본 추가 시도 (id 컬럼 없이 저장)
+            # 기본 추가 시도
             df.to_sql(target_table, conn, if_exists="append", index=False)
             st.success(f"✅ {fname} 추가 완료")
         except:
-            # 에러 발생 시 기존 데이터와 강제 병합 (컬럼 구조 자동 조정)
             try:
                 existing_df = pd.read_sql(f"SELECT * FROM {target_table}", conn)
                 combined_df = pd.concat([existing_df, df], ignore_index=True)
+                # 병합 후 전체 중복 다시 제거
+                combined_df = combined_df.drop_duplicates()
                 combined_df.to_sql(target_table, conn, if_exists="replace", index=False)
-                st.success(f"✅ {fname} 구조 조정 후 병합 완료")
+                st.success(f"✅ {fname} 구조 조정 및 중복 제거 후 병합 완료")
             except:
-                # 테이블이 비어있거나 초기화 상태일 경우 신규 생성
                 df.to_sql(target_table, conn, if_exists="replace", index=False)
                 st.success(f"✅ {fname} 신규 저장됨")
 
@@ -97,7 +96,7 @@ with tab2:
         else: st.info("매출리스트 데이터가 없습니다.")
     except: st.info("데이터를 업로드해주세요.")
 
-# --- 데이터 내보내기 (DB 및 Excel) ---
+# --- 데이터 내보내기 ---
 st.divider()
 st.header("📥 데이터 내보내기")
 
@@ -122,7 +121,6 @@ with col2:
     if st.button("Excel 통합 파일 생성"):
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            # 현재 메모리 DB의 데이터를 엑셀 시트로 변환
             try:
                 pd.read_sql("SELECT * FROM plan_data", conn).to_excel(writer, sheet_name='Plan_Data', index=False)
             except: pass
