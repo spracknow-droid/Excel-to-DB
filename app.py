@@ -104,7 +104,7 @@ with tab2:
         st.dataframe(df_a, use_container_width=True)
     except: st.info("데이터가 없습니다.")
 
-# 🚀 [수정] 전처리 View 탭 로직
+# 🚀 [핵심 수정] Tab 3: 호출 시 컬럼명을 강제로 지정하여 밀림 방지
 with tab3:
     st.subheader("📋 매출리스트 컬럼명 기준 전처리 결과")
     col_left, col_right = st.columns(2)
@@ -112,16 +112,36 @@ with tab3:
     with col_left:
         st.write("**[계획] 전처리 데이터**")
         try:
-            df_plan_clean = pd.read_sql("SELECT * FROM view_cleaned_plan", conn)
+            # 판매계획 뷰에서 필요한 데이터를 매출리스트 형식으로 명시적 호출
+            df_plan_clean = pd.read_sql("""
+                SELECT 
+                    기준월, 
+                    매출처명, 
+                    품명 AS 품목명, 
+                    계획수량 AS 수량, 
+                    계획금액_원화 AS 장부금액 
+                FROM view_plan_vs_actual
+            """, conn)
             st.dataframe(df_plan_clean, use_container_width=True)
-        except: st.info("계획 데이터를 업로드해주세요.")
+        except:
+            st.info("계획 데이터를 업로드해주세요.")
         
     with col_right:
         st.write("**[실적] 전처리 데이터**")
         try:
-            df_actual_clean = pd.read_sql("SELECT * FROM view_cleaned_actual", conn)
+            # 실적 데이터 호출 시 '품명' 컬럼을 '품목명' 위치에 고정하여 밀림 해결
+            df_actual_clean = pd.read_sql("""
+                SELECT 
+                    분석월 AS 기준월, 
+                    매출처명, 
+                    품명 AS 품목명, 
+                    실적수량 AS 수량, 
+                    실적금액_원화 AS 장부금액 
+                FROM view_plan_vs_actual
+            """, conn)
             st.dataframe(df_actual_clean, use_container_width=True)
-        except: st.info("실적 데이터를 업로드해주세요.")
+        except:
+            st.info("실적 데이터를 업로드해주세요.")
 
 # --- 내보내기 ---
 st.divider()
@@ -137,16 +157,20 @@ with col1:
 with col2:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        # 원본 시트
         try: pd.read_sql("SELECT * FROM sales_plan_data", conn).to_excel(writer, sheet_name='plan_raw', index=False)
         except: pass
         try: pd.read_sql("SELECT * FROM sales_actual_data", conn).to_excel(writer, sheet_name='actual_raw', index=False)
         except: pass
         
-        # [수정] 전처리된 시트 추가
-        try: pd.read_sql("SELECT * FROM view_cleaned_plan", conn).to_excel(writer, sheet_name='plan_cleaned', index=False)
+        # 엑셀 다운로드 시에도 컬럼명이 통일된 데이터를 포함
+        try:
+            df_p_clean = pd.read_sql("SELECT 기준월, 매출처명, 품명 AS 품목명, 계획수량 AS 수량, 계획금액_원화 AS 장부금액 FROM view_plan_vs_actual", conn)
+            df_p_clean.to_excel(writer, sheet_name='plan_cleaned', index=False)
         except: pass
-        try: pd.read_sql("SELECT * FROM view_cleaned_actual", conn).to_excel(writer, sheet_name='actual_cleaned', index=False)
+        
+        try:
+            df_a_clean = pd.read_sql("SELECT 분석월 AS 기준월, 매출처명, 품명 AS 품목명, 실적수량 AS 수량, 실적금액_원화 AS 장부금액 FROM view_plan_vs_actual", conn)
+            df_a_clean.to_excel(writer, sheet_name='actual_cleaned', index=False)
         except: pass
         
     st.download_button("📊 Excel 통합 파일 다운로드", output.getvalue(), "cleaned_sales_data.xlsx")
