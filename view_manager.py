@@ -10,7 +10,7 @@ def create_sales_views(conn):
         SELECT 
             strftime('%Y-%m', 계획년월) AS 기준월,
             매출처명,
-            품명,
+            품명 AS 품목명,      -- 매출리스트의 '품목명'에 맞춤   
             판매수량 AS 수량,      -- 매출리스트의 '수량'에 맞춤
             판매금액 AS 장부금액    -- 매출리스트의 '장부금액' 자리에 계획(원화) 배치
         FROM sales_plan_data
@@ -23,7 +23,7 @@ def create_sales_views(conn):
         SELECT 
             strftime('%Y-%m', 매출일) AS 기준월,
             매출처명,
-            품목명 AS 품명,       -- 매출리스트 컬럼명 유지
+            품목명
             수량,
             장부금액              -- 실적의 원화금액인 장부금액 사용
         FROM sales_actual_data
