@@ -6,13 +6,8 @@ import io
 
 # --- 💡 세션 기반 메모리 DB 초기화 ---
 if 'db_conn' not in st.session_state:
+    # 단순하게 연결만 생성 (테이블은 데이터 업로드 시 자동 생성됨)
     st.session_state.db_conn = sqlite3.connect(':memory:', check_same_thread=False)
-    conn = st.session_state.db_conn
-    # id 컬럼 없이 테이블 생성
-    conn.execute("CREATE TABLE IF NOT EXISTS plan_data (dummy TEXT)")
-    conn.execute("CREATE TABLE IF NOT EXISTS actual_data (dummy TEXT)")
-    conn.execute("DELETE FROM plan_data")
-    conn.execute("DELETE FROM actual_data")
 
 conn = st.session_state.db_conn
 
@@ -48,7 +43,7 @@ if excel_files:
         df = pd.read_excel(file)
         fname = file.name
         
-        # 중복 행 삭제 (핵심 수정 사항)
+        # 파일 내 자체 중복 제거
         df = df.drop_duplicates()
         
         if "SLSSPN" in fname:
@@ -61,20 +56,15 @@ if excel_files:
             continue
             
         try:
-            # 기본 추가 시도
-            df.to_sql(target_table, conn, if_exists="append", index=False)
-            st.success(f"✅ {fname} 추가 완료")
+            # 기존 데이터가 있으면 불러와서 병합 후 중복 제거
+            existing_df = pd.read_sql(f"SELECT * FROM {target_table}", conn)
+            combined_df = pd.concat([existing_df, df], ignore_index=True).drop_duplicates()
+            combined_df.to_sql(target_table, conn, if_exists="replace", index=False)
+            st.success(f"✅ {fname} 통합 완료 (중복 제거됨)")
         except:
-            try:
-                existing_df = pd.read_sql(f"SELECT * FROM {target_table}", conn)
-                combined_df = pd.concat([existing_df, df], ignore_index=True)
-                # 병합 후 전체 중복 다시 제거
-                combined_df = combined_df.drop_duplicates()
-                combined_df.to_sql(target_table, conn, if_exists="replace", index=False)
-                st.success(f"✅ {fname} 구조 조정 및 중복 제거 후 병합 완료")
-            except:
-                df.to_sql(target_table, conn, if_exists="replace", index=False)
-                st.success(f"✅ {fname} 신규 저장됨")
+            # 테이블이 없으면 새로 생성 (id, dummy 없음)
+            df.to_sql(target_table, conn, if_exists="replace", index=False)
+            st.success(f"✅ {fname} 신규 저장됨")
 
 # --- 데이터 확인 (Tabs) ---
 st.divider()
@@ -85,14 +75,18 @@ tab1, tab2 = st.tabs(["판매계획 (Plan)", "매출리스트 (Actual)"])
 with tab1:
     try:
         df_p = pd.read_sql("SELECT * FROM plan_data", conn)
-        if not df_p.empty: st.dataframe(df_p, use_container_width=True)
+        if not df_p.empty: 
+            st.write(f"총 행 수: {len(df_p)}")
+            st.dataframe(df_p, use_container_width=True)
         else: st.info("판매계획 데이터가 없습니다.")
     except: st.info("데이터를 업로드해주세요.")
 
 with tab2:
     try:
         df_a = pd.read_sql("SELECT * FROM actual_data", conn)
-        if not df_a.empty: st.dataframe(df_a, use_container_width=True)
+        if not df_a.empty: 
+            st.write(f"총 행 수: {len(df_a)}")
+            st.dataframe(df_a, use_container_width=True)
         else: st.info("매출리스트 데이터가 없습니다.")
     except: st.info("데이터를 업로드해주세요.")
 
