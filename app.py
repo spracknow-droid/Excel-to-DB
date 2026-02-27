@@ -6,7 +6,6 @@ import io
 
 # --- 💡 세션 기반 메모리 DB 초기화 ---
 if 'db_conn' not in st.session_state:
-    # 단순하게 연결만 생성 (테이블은 데이터 업로드 시 자동 생성됨)
     st.session_state.db_conn = sqlite3.connect(':memory:', check_same_thread=False)
 
 conn = st.session_state.db_conn
@@ -56,13 +55,11 @@ if excel_files:
             continue
             
         try:
-            # 기존 데이터가 있으면 불러와서 병합 후 중복 제거
             existing_df = pd.read_sql(f"SELECT * FROM {target_table}", conn)
             combined_df = pd.concat([existing_df, df], ignore_index=True).drop_duplicates()
             combined_df.to_sql(target_table, conn, if_exists="replace", index=False)
-            st.success(f"✅ {fname} 통합 완료 (중복 제거됨)")
+            st.success(f"✅ {fname} 통합 완료")
         except:
-            # 테이블이 없으면 새로 생성 (id, dummy 없음)
             df.to_sql(target_table, conn, if_exists="replace", index=False)
             st.success(f"✅ {fname} 신규 저장됨")
 
@@ -90,41 +87,41 @@ with tab2:
         else: st.info("매출리스트 데이터가 없습니다.")
     except: st.info("데이터를 업로드해주세요.")
 
-# --- 데이터 내보내기 ---
+# --- 데이터 내보내기 (클릭 1번으로 개선) ---
 st.divider()
 st.header("📥 데이터 내보내기")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    if st.button("SQLite DB 파일 생성"):
-        temp_db_path = "export_session_data.db"
-        with sqlite3.connect(temp_db_path) as export_conn:
-            st.session_state.db_conn.backup(export_conn)
-        
-        with open(temp_db_path, "rb") as f:
-            st.download_button(
-                label="💾 DB 파일 다운로드",
-                data=f.read(),
-                file_name="integrated_data.db",
-                mime="application/x-sqlite3"
-            )
-        if os.path.exists(temp_db_path): os.remove(temp_db_path)
+    # DB 파일 다운로드
+    temp_db_path = "export_session_data.db"
+    with sqlite3.connect(temp_db_path) as export_conn:
+        st.session_state.db_conn.backup(export_conn)
+    
+    with open(temp_db_path, "rb") as f:
+        st.download_button(
+            label="💾 SQLite DB 다운로드",
+            data=f.read(),
+            file_name="integrated_data.db",
+            mime="application/x-sqlite3"
+        )
+    if os.path.exists(temp_db_path): os.remove(temp_db_path)
 
 with col2:
-    if st.button("Excel 통합 파일 생성"):
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            try:
-                pd.read_sql("SELECT * FROM plan_data", conn).to_excel(writer, sheet_name='Plan_Data', index=False)
-            except: pass
-            try:
-                pd.read_sql("SELECT * FROM actual_data", conn).to_excel(writer, sheet_name='Actual_Data', index=False)
-            except: pass
-        
-        st.download_button(
-            label="📊 Excel 파일 다운로드",
-            data=output.getvalue(),
-            file_name="integrated_data.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    # Excel 파일 다운로드
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        try:
+            pd.read_sql("SELECT * FROM plan_data", conn).to_excel(writer, sheet_name='Plan_Data', index=False)
+        except: pass
+        try:
+            pd.read_sql("SELECT * FROM actual_data", conn).to_excel(writer, sheet_name='Actual_Data', index=False)
+        except: pass
+    
+    st.download_button(
+        label="📊 Excel 통합 파일 다운로드",
+        data=output.getvalue(),
+        file_name="integrated_data.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
