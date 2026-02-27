@@ -4,7 +4,7 @@ import sqlite3
 import os
 import io
 from processor import clean_data
-from view_manager import create_sales_views  # 🚀 추가: View 생성 함수 임포트
+from view_manager import create_sales_views 
 
 # --- 💡 세션 기반 메모리 DB 초기화 ---
 if 'db_conn' not in st.session_state:
@@ -34,7 +34,6 @@ if uploaded_db:
         temp_conn.backup(st.session_state.db_conn)
     os.remove("temp_uploaded.db")
     
-    # DB 로드 후 View 업데이트
     try:
         create_sales_views(st.session_state.db_conn)
     except:
@@ -76,60 +75,53 @@ if excel_files:
         except Exception:
             df.to_sql(target_table, conn, if_exists="replace", index=False)
 
-        # SQL 기반 중복 제거
         safe_columns = [f'"{col}"' for col in df.columns]
         group_cols = ", ".join(safe_columns)
         try:
             conn.execute(f"DELETE FROM {target_table} WHERE rowid NOT IN (SELECT MIN(rowid) FROM {target_table} GROUP BY {group_cols})")
             conn.commit()
             
-            # 🚀 [핵심 추가] 데이터 업로드 후 분석 View 생성/업데이트 호출
+            # 전처리 View 생성 호출
             create_sales_views(conn)
             
-            st.success(f"✅ {fname} 반영 및 분석 View 업데이트 완료")
+            st.success(f"✅ {fname} 반영 및 전처리 완료")
         except sqlite3.OperationalError as e:
             st.error(f"⚠️ {fname} SQL 오류: {e}")
 
 # --- 데이터 확인 ---
 st.divider()
-# 🚀 탭 추가: 분석 View 탭을 세 번째에 배치
-tab1, tab2, tab3 = st.tabs(["판매계획 (Sales Plan)", "매출리스트 (Sales Actual)", "📊 분석 View (Plan vs Actual)"])
+tab1, tab2, tab3 = st.tabs(["판매계획 원본", "매출리스트 원본", "🧹 전처리 통합 (Cleaned)"])
 
 with tab1:
     try:
         df_p = pd.read_sql("SELECT * FROM sales_plan_data", conn)
-        if not df_p.empty:
-            st.write(f"현재 데이터: **{len(df_p)}** 행")
-            st.dataframe(df_p, use_container_width=True)
-        else: st.info("데이터가 비어있습니다.")
+        st.dataframe(df_p, use_container_width=True)
     except: st.info("데이터가 없습니다.")
 
 with tab2:
     try:
         df_a = pd.read_sql("SELECT * FROM sales_actual_data", conn)
-        if not df_a.empty:
-            st.write(f"현재 데이터: **{len(df_a)}** 행")
-            st.dataframe(df_a, use_container_width=True)
-        else: st.info("데이터가 비어있습니다.")
+        st.dataframe(df_a, use_container_width=True)
     except: st.info("데이터가 없습니다.")
 
-# 🚀 [추가] 분석 View 탭 로직
+# 🚀 [수정] 전처리 View 탭 로직
 with tab3:
-    st.subheader("📈 계획 대비 실적 분석 (장부금액 기준)")
-    try:
-        # view_manager에서 생성한 view 조회
-        df_v = pd.read_sql("SELECT * FROM view_plan_vs_actual ORDER BY 분석월 DESC", conn)
-        if not df_v.empty:
-            # 수치 가독성을 위해 스타일링 (옵션)
-            st.dataframe(df_v.style.format({
-                '계획수량': '{:,.0f}', '실적수량': '{:,.0f}', '수량차이': '{:,.0f}',
-                '계획금액_원화': '{:,.0f}', '실적금액_원화': '{:,.0f}', '금액차이_원화': '{:,.0f}',
-                '매출달성률': '{:.1f}%'
-            }), use_container_width=True)
-        else:
-            st.info("분석할 데이터가 충분하지 않습니다. 계획과 실적 파일을 모두 업로드해주세요.")
-    except:
-        st.info("데이터 업로드 시 분석 View가 자동으로 생성됩니다.")
+    st.subheader("📋 매출리스트 컬럼명 기준 전처리 결과")
+    col_left, col_right = st.columns(2)
+    
+    with col_left:
+        st.write("**[계획] 전처리 데이터**")
+        try:
+            df_plan_clean = pd.read_sql("SELECT * FROM view_cleaned_plan", conn)
+            st.dataframe(df_plan_clean, use_container_width=True)
+        except: st.info("계획 데이터를 업로드해주세요.")
+        
+    with col_right:
+        st.write("**[실적] 전처리 데이터**")
+        try:
+            df_actual_clean = pd.read_sql("SELECT * FROM view_cleaned_actual", conn)
+            st.dataframe(df_actual_clean, use_container_width=True)
+        except: st.info("실적 데이터를 업로드해주세요.")
 
 # --- 내보내기 ---
 st.divider()
@@ -145,12 +137,16 @@ with col1:
 with col2:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        try: pd.read_sql("SELECT * FROM sales_plan_data", conn).to_excel(writer, sheet_name='sales_plan_data', index=False)
+        # 원본 시트
+        try: pd.read_sql("SELECT * FROM sales_plan_data", conn).to_excel(writer, sheet_name='plan_raw', index=False)
         except: pass
-        try: pd.read_sql("SELECT * FROM sales_actual_data", conn).to_excel(writer, sheet_name='sales_actual_data', index=False)
-        except: pass
-        # 🚀 [추가] 분석 View 결과도 엑셀 시트로 포함
-        try: pd.read_sql("SELECT * FROM view_plan_vs_actual", conn).to_excel(writer, sheet_name='Analysis_View', index=False)
+        try: pd.read_sql("SELECT * FROM sales_actual_data", conn).to_excel(writer, sheet_name='actual_raw', index=False)
         except: pass
         
-    st.download_button("📊 Excel 통합 파일 다운로드", output.getvalue(), "integrated_data.xlsx")
+        # [수정] 전처리된 시트 추가
+        try: pd.read_sql("SELECT * FROM view_cleaned_plan", conn).to_excel(writer, sheet_name='plan_cleaned', index=False)
+        except: pass
+        try: pd.read_sql("SELECT * FROM view_cleaned_actual", conn).to_excel(writer, sheet_name='actual_cleaned', index=False)
+        except: pass
+        
+    st.download_button("📊 Excel 통합 파일 다운로드", output.getvalue(), "cleaned_sales_data.xlsx")
