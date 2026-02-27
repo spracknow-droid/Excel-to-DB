@@ -17,6 +17,19 @@ def clean_date_columns(df):
             df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
     return df
 
+def remove_total_rows(df):
+    """
+    '매출번호' 컬럼의 값이 '합계'인 행을 삭제합니다.
+    """
+    if df is None or df.empty:
+        return df
+    
+    if '매출번호' in df.columns:
+        # '매출번호' 컬럼이 문자열 '합계'인 행을 제외하고 다시 구성
+        df = df[df['매출번호'] != '합계']
+        
+    return df.reset_index(drop=True)
+
 def finalize_combined_df(all_data):
     """데이터프레임 리스트를 하나로 합치고 컬럼명 정제 [1, 4]"""
     if not all_data: return None
