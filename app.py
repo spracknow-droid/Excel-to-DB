@@ -14,7 +14,7 @@ conn = st.session_state.db_conn
 st.set_page_config(page_title="데이터 통합 도구", layout="wide")
 st.title("🔋 세션 기반 실시간 데이터 통합")
 
-# --- 사이드바: 초기화 버튼 삭제 ---
+# --- 사이드바 ---
 with st.sidebar:
     st.header("📂 데이터 업로드")
     excel_files = st.file_uploader(
@@ -34,12 +34,14 @@ if uploaded_db:
     os.remove("temp_uploaded.db")
     st.sidebar.success("✅ DB 파일 로드 완료")
 
-# --- 로직 2: 엑셀 파일 처리 ---
+# --- 로직 2: 엑셀 파일 처리 (업로드 즉시 전처리) ---
 if excel_files:
     for file in excel_files:
-        df = pd.read_excel(file)
+        # [수정] 읽기 시점부터 모든 컬럼을 문자열로 읽어 데이터 변형 방지
+        df = pd.read_excel(file, dtype=str)
         fname = file.name
 
+        # 파일명에 따른 테이블 지정 및 즉시 전처리 수행
         if "SLSSPN" in fname:
             target_table = "plan_data"
             df = clean_data(df, "SLSSPN")
@@ -55,14 +57,19 @@ if excel_files:
             # 기존 컬럼 구조 확인
             existing_columns = pd.read_sql(f"SELECT * FROM {target_table} LIMIT 0", conn).columns.tolist()
 
+            # 신규 업로드 시 기존 DB에 없는 컬럼이 있으면 None으로 보정
             for col in existing_columns:
                 if col not in df.columns:
                     df[col] = None
             
-            df = df[existing_columns]
+            # 기존 DB 구조가 있다면 컬럼 순서를 맞춤
+            if existing_columns:
+                df = df[existing_columns]
+                
             df.to_sql(target_table, conn, if_exists="append", index=False)
 
         except Exception:
+            # 테이블이 없으면 전처리된 상태 그대로 신규 생성
             df.to_sql(target_table, conn, if_exists="replace", index=False)
 
         # SQL 기반 중복 제거
@@ -79,7 +86,7 @@ if excel_files:
                 )
             """)
             conn.commit()
-            st.success(f"✅ {fname} 누적 완료")
+            st.success(f"✅ {fname} 전처리 및 누적 완료")
         except sqlite3.OperationalError as e:
             st.error(f"⚠️ {fname} SQL 오류: {e}")
 
