@@ -3,6 +3,7 @@ import pandas as pd
 import sqlite3
 import os
 import io
+from processor import clean_data  # 새로 만든 전처리 로직 임포트
 
 # --- 💡 세션 기반 메모리 DB 초기화 ---
 if 'db_conn' not in st.session_state:
@@ -43,13 +44,12 @@ if excel_files:
         df = pd.read_excel(file)
         fname = file.name
 
-        # 문자열 공백 제거
-        df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
-
         if "SLSSPN" in fname:
             target_table = "plan_data"
+            df = clean_data(df, "SLSSPN")  # 전처리 호출
         elif "BILBIV" in fname:
             target_table = "actual_data"
+            df = clean_data(df, "BILBIV")  # 전처리 호출
             if '매출번호' in df.columns:
                 df = df[df['매출번호'].astype(str).str.contains('합계') == False]
         else:
@@ -59,24 +59,20 @@ if excel_files:
             # 기존 컬럼 구조 확인
             existing_columns = pd.read_sql(f"SELECT * FROM {target_table} LIMIT 0", conn).columns.tolist()
 
-            # 누락 컬럼 추가 (None 채우기)
+            # 누락 컬럼 보정
             for col in existing_columns:
                 if col not in df.columns:
                     df[col] = None
-
-            # 기존에 없던 새 컬럼이 엑셀에 있다면, DB 구조가 자동 확장되지 않으므로 
-            # 엑셀의 컬럼 순서를 기존 DB 순서에 맞춤 (기존 DB 기준 필터링)
+            
+            # 컬럼 순서 일치 및 추가 데이터만 필터링
             df = df[existing_columns]
-
-            # 데이터 추가
             df.to_sql(target_table, conn, if_exists="append", index=False)
 
         except Exception:
-            # 테이블이 없으면 신규 생성 (중복 제거 후)
-            df.drop_duplicates().to_sql(target_table, conn, if_exists="replace", index=False)
+            # 테이블 신규 생성
+            df.to_sql(target_table, conn, if_exists="replace", index=False)
 
-        # --- 정밀 수정: SQL 중복 제거 (컬럼명 이스케이프 처리) ---
-        # 엑셀 컬럼명에 공백/특수문자가 있어도 안전하도록 " "로 감쌈
+        # --- SQL 기반 중복 제거 (쌍따옴표 처리로 에러 방지) ---
         safe_columns = [f'"{col}"' for col in df.columns]
         group_cols = ", ".join(safe_columns)
 
@@ -92,9 +88,9 @@ if excel_files:
             conn.commit()
             st.success(f"✅ {fname} 누적 완료")
         except sqlite3.OperationalError as e:
-            st.error(f"⚠️ {fname} 처리 중 SQL 오류 발생: {e}")
+            st.error(f"⚠️ {fname} SQL 오류: {e}")
 
-# --- 데이터 확인 ---
+# --- 데이터 확인 탭 ---
 st.divider()
 tab1, tab2 = st.tabs(["판매계획 (Plan)", "매출리스트 (Actual)"])
 
@@ -102,24 +98,23 @@ with tab1:
     try:
         df_p = pd.read_sql("SELECT * FROM plan_data", conn)
         if not df_p.empty:
-            st.write(f"현재 누적 데이터: **{len(df_p)}** 행")
+            st.write(f"현재 데이터: **{len(df_p)}** 행")
             st.dataframe(df_p, use_container_width=True)
         else: st.info("데이터가 비어있습니다.")
-    except: st.info("업로드된 판매계획 데이터가 없습니다.")
+    except: st.info("데이터가 없습니다.")
 
 with tab2:
     try:
         df_a = pd.read_sql("SELECT * FROM actual_data", conn)
         if not df_a.empty:
-            st.write(f"현재 누적 데이터: **{len(df_a)}** 행")
+            st.write(f"현재 데이터: **{len(df_a)}** 행")
             st.dataframe(df_a, use_container_width=True)
         else: st.info("데이터가 비어있습니다.")
-    except: st.info("업로드된 매출리스트 데이터가 없습니다.")
+    except: st.info("데이터가 없습니다.")
 
 # --- 내보내기 ---
 st.divider()
 col1, col2 = st.columns(2)
-
 with col1:
     temp_db_path = "export.db"
     with sqlite3.connect(temp_db_path) as export_conn:
