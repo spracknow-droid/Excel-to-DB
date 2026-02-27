@@ -18,7 +18,7 @@ st.title("Excel to DB (판매 데이터 통합 및 SQLite 변환)")
 with st.sidebar:
     st.header("📂 데이터 업로드")
     excel_files = st.file_uploader(
-        "1️⃣ 시스템 엑셀 파일 (SLSSPN / BILBIV)", 
+        "1️⃣ ERP 엑셀 파일 (SLSSPN / BILBIV)", 
         type=["xlsx", "xls"], 
         accept_multiple_files=True
     )
