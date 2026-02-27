@@ -5,6 +5,7 @@ import os
 import io
 from processor import clean_data
 
+# --- 💡 세션 기반 메모리 DB 초기화 ---
 if 'db_conn' not in st.session_state:
     st.session_state.db_conn = sqlite3.connect(':memory:', check_same_thread=False)
 
@@ -38,23 +39,23 @@ if excel_files:
     for file in excel_files:
         fname = file.name
         
-        # [정밀 수정] 파일 유형별로 문자열로 지켜야 할 컬럼 지정
+        # [수정] 파일 유형별로 문자열로 지켜야 할 컬럼 및 테이블 명칭 지정
         str_converters = {}
         if "SLSSPN" in fname:
-            target_table = "plan_data"
+            target_table = "sales_plan_data"  # 테이블명 변경
             target_type = "SLSSPN"
             str_converters = {'매출처': str, '품목코드': str}
         elif "BILBIV" in fname:
-            target_table = "actual_data"
+            target_table = "sales_actual_data"  # 테이블명 변경
             target_type = "BILBIV"
             str_converters = {'매출처': str, '품목': str, '수금처': str, '납품처': str}
         else:
             continue
 
-        # 엑셀 읽기: 지정된 컬럼은 str로 유지, 수량/금액 등 나머지는 자동으로 읽음
+        # 엑셀 읽기
         df = pd.read_excel(file, converters=str_converters)
         
-        # 전처리 (공백 제거 및 날짜 변환)
+        # 전처리 (공백 제거 및 지정된 4대 날짜 컬럼 시분초 변환)
         df = clean_data(df, target_type)
 
         # 매출리스트 합계 제외 로직
@@ -62,6 +63,7 @@ if excel_files:
             df = df[df['매출번호'].astype(str).str.contains('합계') == False]
 
         try:
+            # 기존 테이블 구조에 맞춰 컬럼 보정
             existing_columns = pd.read_sql(f"SELECT * FROM {target_table} LIMIT 0", conn).columns.tolist()
             for col in existing_columns:
                 if col not in df.columns:
@@ -72,9 +74,10 @@ if excel_files:
                 
             df.to_sql(target_table, conn, if_exists="append", index=False)
         except Exception:
+            # 테이블이 없으면 신규 생성
             df.to_sql(target_table, conn, if_exists="replace", index=False)
 
-        # SQL 중복 제거
+        # SQL 기반 중복 제거
         safe_columns = [f'"{col}"' for col in df.columns]
         group_cols = ", ".join(safe_columns)
         try:
@@ -84,13 +87,13 @@ if excel_files:
         except sqlite3.OperationalError as e:
             st.error(f"⚠️ {fname} SQL 오류: {e}")
 
-# --- 데이터 확인 및 내보내기 로직 (이하 동일) ---
+# --- 데이터 확인 ---
 st.divider()
-tab1, tab2 = st.tabs(["판매계획 (Plan)", "매출리스트 (Actual)"])
+tab1, tab2 = st.tabs(["판매계획 (Sales Plan)", "매출리스트 (Sales Actual)"])
 
 with tab1:
     try:
-        df_p = pd.read_sql("SELECT * FROM plan_data", conn)
+        df_p = pd.read_sql("SELECT * FROM sales_plan_data", conn)
         if not df_p.empty:
             st.write(f"현재 데이터: **{len(df_p)}** 행")
             st.dataframe(df_p, use_container_width=True)
@@ -99,13 +102,14 @@ with tab1:
 
 with tab2:
     try:
-        df_a = pd.read_sql("SELECT * FROM actual_data", conn)
+        df_a = pd.read_sql("SELECT * FROM sales_actual_data", conn)
         if not df_a.empty:
             st.write(f"현재 데이터: **{len(df_a)}** 행")
             st.dataframe(df_a, use_container_width=True)
         else: st.info("데이터가 비어있습니다.")
     except: st.info("데이터가 없습니다.")
 
+# --- 내보내기 ---
 st.divider()
 col1, col2 = st.columns(2)
 with col1:
@@ -119,8 +123,11 @@ with col1:
 with col2:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        try: pd.read_sql("SELECT * FROM plan_data", conn).to_excel(writer, sheet_name='Plan', index=False)
+        # [수정] 엑셀 시트명도 동일하게 통일
+        try: 
+            pd.read_sql("SELECT * FROM sales_plan_data", conn).to_excel(writer, sheet_name='sales_plan_data', index=False)
         except: pass
-        try: pd.read_sql("SELECT * FROM actual_data", conn).to_excel(writer, sheet_name='Actual', index=False)
+        try: 
+            pd.read_sql("SELECT * FROM sales_actual_data", conn).to_excel(writer, sheet_name='sales_actual_data', index=False)
         except: pass
     st.download_button("📊 Excel 통합 파일 다운로드", output.getvalue(), "integrated_data.xlsx")
