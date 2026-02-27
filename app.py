@@ -11,6 +11,7 @@ def get_connection():
 
 st.set_page_config(page_title="Data Ingestion System", layout="wide")
 st.title("🗄️ 시스템 파일 자동 분류 및 DB 통합")
+st.info("판매계획(SLSSPN)과 매출리스트(BILBIV)를 분류하여 저장하며, 매출리스트의 '합계' 행은 자동으로 제외합니다.")
 
 # --- 사이드바: 3-Source 업로드 ---
 with st.sidebar:
@@ -41,21 +42,37 @@ if excel_files:
         df = pd.read_excel(file)
         fname = file.name
         
-        # 💡 사용자가 알려준 파일명 규칙 적용
+        # 1. 파일명 기반 자동 테이블 분류
         if "SLSSPN" in fname:
             target_table = "plan_data"
             label = "📝 판매계획 (SLSSPN)"
+            
         elif "BILBIV" in fname:
             target_table = "actual_data"
             label = "💰 매출리스트 (BILBIV)"
+            
+            # 💡 [핵심 추가] 매출리스트 '매출번호' 컬럼에서 '합계' 행 삭제
+            if '매출번호' in df.columns:
+                before_count = len(df)
+                # '매출번호'가 문자열인 경우 '합계'를 포함하거나 일치하는 행 제외
+                df = df[df['매출번호'].astype(str).str.contains('합계') == False]
+                after_count = len(df)
+                
+                if before_count != after_count:
+                    st.caption(f"ℹ️ {fname}: 합계 행 {before_count - after_count}건을 제외했습니다.")
+            else:
+                st.warning(f"⚠️ {fname}: '매출번호' 컬럼을 찾을 수 없어 합계 제외 처리를 스킵했습니다.")
+        
         else:
             st.error(f"❌ 분류 불가: '{fname}' (파일명 규칙에 맞지 않음)")
             continue
             
-        # DB 저장 (누적)
-        df.to_sql(target_table, conn, if_exists="append", index=False)
-        st.toast(f"{fname} 저장 완료!", icon="✅")
-        st.write(f"**{label}** 저장됨: `{fname}` ({len(df)}건)")
+        # 2. DB 저장 (누적)
+        try:
+            df.to_sql(target_table, conn, if_exists="append", index=False)
+            st.success(f"✅ {label} 저장 완료: `{fname}` ({len(df)}건)")
+        except Exception as e:
+            st.error(f"저장 오류 ({fname}): {e}")
     
     conn.close()
 
