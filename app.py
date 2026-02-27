@@ -12,7 +12,7 @@ if 'db_conn' not in st.session_state:
 conn = st.session_state.db_conn
 
 st.set_page_config(page_title="데이터 통합 도구", layout="wide")
-st.title("🔋 세션 기반 실시간 데이터 통합")
+st.title("Excel to DB (판매 데이터 통합 및 SQLite 변환)")
 
 # --- 사이드바 ---
 with st.sidebar:
