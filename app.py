@@ -56,42 +56,43 @@ if excel_files:
             continue
 
         try:
-            # 테이블 존재 여부 확인
-            existing_df = pd.read_sql(f"SELECT * FROM {target_table} LIMIT 1", conn)
+            # 기존 컬럼 구조 확인
+            existing_columns = pd.read_sql(f"SELECT * FROM {target_table} LIMIT 0", conn).columns.tolist()
 
-            # 컬럼 구조 맞추기
-            existing_columns = pd.read_sql(f"SELECT * FROM {target_table} LIMIT 0", conn).columns
-
-            # 누락 컬럼 추가
+            # 누락 컬럼 추가 (None 채우기)
             for col in existing_columns:
                 if col not in df.columns:
                     df[col] = None
 
-            # 컬럼 순서 정렬
+            # 기존에 없던 새 컬럼이 엑셀에 있다면, DB 구조가 자동 확장되지 않으므로 
+            # 엑셀의 컬럼 순서를 기존 DB 순서에 맞춤 (기존 DB 기준 필터링)
             df = df[existing_columns]
 
-            # append 방식으로 추가
+            # 데이터 추가
             df.to_sql(target_table, conn, if_exists="append", index=False)
 
         except Exception:
-            # 테이블이 없으면 신규 생성
+            # 테이블이 없으면 신규 생성 (중복 제거 후)
             df.drop_duplicates().to_sql(target_table, conn, if_exists="replace", index=False)
 
-        # --- 완전 중복 제거 (SQL 기반) ---
-        columns = df.columns.tolist()
-        group_cols = ", ".join(columns)
+        # --- 정밀 수정: SQL 중복 제거 (컬럼명 이스케이프 처리) ---
+        # 엑셀 컬럼명에 공백/특수문자가 있어도 안전하도록 " "로 감쌈
+        safe_columns = [f'"{col}"' for col in df.columns]
+        group_cols = ", ".join(safe_columns)
 
-        conn.execute(f"""
-            DELETE FROM {target_table}
-            WHERE rowid NOT IN (
-                SELECT MIN(rowid)
-                FROM {target_table}
-                GROUP BY {group_cols}
-            )
-        """)
-        conn.commit()
-
-        st.success(f"✅ {fname} 누적 완료")
+        try:
+            conn.execute(f"""
+                DELETE FROM {target_table}
+                WHERE rowid NOT IN (
+                    SELECT MIN(rowid)
+                    FROM {target_table}
+                    GROUP BY {group_cols}
+                )
+            """)
+            conn.commit()
+            st.success(f"✅ {fname} 누적 완료")
+        except sqlite3.OperationalError as e:
+            st.error(f"⚠️ {fname} 처리 중 SQL 오류 발생: {e}")
 
 # --- 데이터 확인 ---
 st.divider()
@@ -103,10 +104,8 @@ with tab1:
         if not df_p.empty:
             st.write(f"현재 누적 데이터: **{len(df_p)}** 행")
             st.dataframe(df_p, use_container_width=True)
-        else:
-            st.info("데이터가 비어있습니다.")
-    except:
-        st.info("업로드된 판매계획 데이터가 없습니다.")
+        else: st.info("데이터가 비어있습니다.")
+    except: st.info("업로드된 판매계획 데이터가 없습니다.")
 
 with tab2:
     try:
@@ -114,10 +113,8 @@ with tab2:
         if not df_a.empty:
             st.write(f"현재 누적 데이터: **{len(df_a)}** 행")
             st.dataframe(df_a, use_container_width=True)
-        else:
-            st.info("데이터가 비어있습니다.")
-    except:
-        st.info("업로드된 매출리스트 데이터가 없습니다.")
+        else: st.info("데이터가 비어있습니다.")
+    except: st.info("업로드된 매출리스트 데이터가 없습니다.")
 
 # --- 내보내기 ---
 st.divider()
@@ -129,18 +126,13 @@ with col1:
         st.session_state.db_conn.backup(export_conn)
     with open(temp_db_path, "rb") as f:
         st.download_button("💾 SQLite DB 다운로드", f, "integrated_data.db")
-    if os.path.exists(temp_db_path):
-        os.remove(temp_db_path)
+    if os.path.exists(temp_db_path): os.remove(temp_db_path)
 
 with col2:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        try:
-            pd.read_sql("SELECT * FROM plan_data", conn).to_excel(writer, sheet_name='Plan', index=False)
-        except:
-            pass
-        try:
-            pd.read_sql("SELECT * FROM actual_data", conn).to_excel(writer, sheet_name='Actual', index=False)
-        except:
-            pass
+        try: pd.read_sql("SELECT * FROM plan_data", conn).to_excel(writer, sheet_name='Plan', index=False)
+        except: pass
+        try: pd.read_sql("SELECT * FROM actual_data", conn).to_excel(writer, sheet_name='Actual', index=False)
+        except: pass
     st.download_button("📊 Excel 통합 파일 다운로드", output.getvalue(), "integrated_data.xlsx")
