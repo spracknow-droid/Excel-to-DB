@@ -66,3 +66,25 @@ with tab2:
         if not df_a.empty: st.dataframe(df_a, use_container_width=True)
         else: st.info("데이터가 없습니다.")
     except: st.info("데이터가 없습니다.")
+
+
+st.divider()
+st.header("📥 통합 DB 파일 내보내기")
+
+if st.button("내보내기 준비 (클릭 시 링크 생성)"):
+    # 메모리(RAM)에 있는 데이터를 임시로 바이트화함
+    temp_db_path = "export_session_data.db"
+    with sqlite3.connect(temp_db_path) as export_conn:
+        st.session_state.db_conn.backup(export_conn) # RAM -> 임시 파일 백업
+    
+    with open(temp_db_path, "rb") as f:
+        st.download_button(
+            label="SQLite DB 파일 다운로드",
+            data=f.read(),
+            file_name="integrated_data.db",
+            mime="application/x-sqlite3"
+        )
+    
+    # 다운로드 링크 생성 후 서버의 임시 파일은 즉시 삭제
+    if os.path.exists(temp_db_path):
+        os.remove(temp_db_path)
